@@ -1,0 +1,426 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// 1. USER & MULTI-LAYER RBAC
+// -----------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  EDITOR
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  BANNED
+  PENDING
+}
+
+model User {
+  id              String      @id @default(cuid())
+  email           String      @unique
+  passwordHash    String
+  fullName        String
+  avatarUrl       String?
+  role            Role        @default(USER)
+  status          UserStatus  @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  sessions           Session[]
+  verificationTokens VerificationToken[]
+  mediaAssets        MediaAsset[]
+  notifications      Notification[]
+  bookmarks          Bookmark[]
+  comments           Comment[]
+  auditLogs          AuditLog[]
+  instructedCourses  Course[]            @relation("InstructorCourses")
+  enrollments        Enrollment[]
+  lessonProgress     LessonProgress[]
+  certificates       Certificate[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([sessionToken])
+}
+
+model VerificationToken {
+  id         String   @id @default(cuid())
+  token      String   @unique
+  identifier String
+  type       String   // "PASSWORD_RESET" | "EMAIL_VERIFICATION"
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([identifier, token])
+}
+
+// -----------------------------------------------------------------------------
+// 2. DYNAMIC HEADER, FOOTER & MULTI-LEVEL NAVIGATION
+// -----------------------------------------------------------------------------
+
+enum MenuLocation {
+  HEADER_MAIN
+  HEADER_UTILITY
+  FOOTER_COL_1
+  FOOTER_COL_2
+  FOOTER_COL_3
+  FOOTER_BOTTOM
+  MOBILE_MENU
+}
+
+model NavigationItem {
+  id           String          @id @default(cuid())
+  title        String
+  slugOrUrl    String
+  icon         String?
+  badgeText    String?
+  location     MenuLocation
+  parentId     String?
+  parent       NavigationItem? @relation("MenuHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children     NavigationItem[] @relation("MenuHierarchy")
+  sortOrder    Int             @default(0)
+  isExternal   Boolean         @default(false)
+  isActive     Boolean         @default(true)
+  requiredRole Role?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([location, isActive, sortOrder])
+  @@index([parentId])
+}
+
+// -----------------------------------------------------------------------------
+// 3. GLOBAL SITE SETTINGS
+// -----------------------------------------------------------------------------
+
+enum SettingGroup {
+  GENERAL
+  HEADER_FOOTER
+  SEO
+  SOCIAL
+  THEME
+  SYSTEM
+}
+
+model SiteSetting {
+  id          String       @id @default(cuid())
+  key         String       @unique
+  value       Json
+  group       SettingGroup
+  description String?
+  updatedAt   DateTime     @updatedAt
+
+  @@index([group])
+  @@index([key])
+}
+
+// -----------------------------------------------------------------------------
+// 4. MEDIA LIBRARY & ASSET MANAGER
+// -----------------------------------------------------------------------------
+
+enum FileType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+}
+
+model MediaAsset {
+  id           String     @id @default(cuid())
+  fileName     String
+  fileUrl      String
+  fileType     FileType   @default(IMAGE)
+  mimeType     String
+  fileSize     Int
+  altText      String?
+  uploadedById String?
+  uploadedBy   User?      @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+
+  @@index([fileType])
+  @@index([uploadedById])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// 5. IN-APP NOTIFICATIONS
+// -----------------------------------------------------------------------------
+
+enum NotificationType {
+  SYSTEM
+  SECURITY
+  INTERACTION
+  PROMOTION
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      NotificationType @default(SYSTEM)
+  actionUrl String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// 6. POLYMORPHIC INTERACTIONS (BOOKMARKS & COMMENTS)
+// -----------------------------------------------------------------------------
+
+model Bookmark {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityType String   // e.g. "ARTICLE", "PRODUCT", "COURSE", "MEDIA"
+  entityId   String
+  metadata   Json     // { title, thumbnail, slug, subtitle }
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, entityType, entityId])
+  @@index([userId])
+  @@index([entityType, entityId])
+}
+
+model Comment {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityType String
+  entityId   String
+  content    String
+  rating     Int?
+  parentId   String?
+  parent     Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    Comment[] @relation("CommentReplies")
+  isHidden   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([entityType, entityId, isHidden])
+  @@index([userId])
+  @@index([parentId])
+}
+
+// -----------------------------------------------------------------------------
+// 7. SECURITY & AUDIT LOGS
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String   // e.g. "CREATE_MENU", "UPDATE_ROLE", "BAN_USER", "LOGIN"
+  entityType String
+  entityId   String?
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// 8. E-LEARNING / EDTECH CORE ENTITIES
+// -----------------------------------------------------------------------------
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ALL_LEVELS
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  icon        String?  // lucide icon identifier or emoji
+  thumbnail   String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  courses     Course[]
+
+  @@index([slug])
+  @@index([sortOrder])
+}
+
+model Course {
+  id              String      @id @default(cuid())
+  title           String
+  slug            String      @unique
+  subtitle        String?
+  description     String
+  thumbnail       String?
+  trailerVideoUrl String?
+  level           CourseLevel @default(ALL_LEVELS)
+  price           Float       @default(0)
+  discountPrice   Float?
+  durationMinutes Int         @default(0)
+  isPublished     Boolean     @default(true)
+  isFeatured      Boolean     @default(false)
+
+  // Relationships
+  instructorId    String
+  instructor      User        @relation("InstructorCourses", fields: [instructorId], references: [id], onDelete: Cascade)
+
+  categoryId      String
+  category        Category    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  chapters        Chapter[]
+  enrollments     Enrollment[]
+  certificates    Certificate[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([categoryId])
+  @@index([instructorId])
+  @@index([isPublished, isFeatured])
+  @@index([slug])
+}
+
+model Chapter {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String
+  description String?
+  sortOrder   Int      @default(0)
+
+  courseId    String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  lessons     Lesson[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([courseId, sortOrder])
+}
+
+model Lesson {
+  id              String           @id @default(cuid())
+  title           String
+  slug            String
+  content         String?          @db.Text
+  videoUrl        String?
+  durationMinutes Int              @default(10)
+  isFreePreview   Boolean          @default(false)
+  sortOrder       Int              @default(0)
+
+  chapterId       String
+  chapter         Chapter          @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  progress        LessonProgress[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([chapterId, sortOrder])
+}
+
+model Enrollment {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  courseId        String
+  course          Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  status          EnrollmentStatus @default(ACTIVE)
+  progressPercent Float            @default(0)
+  completedAt     DateTime?
+  enrolledAt      DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  certificates    Certificate[]
+
+  @@unique([userId, courseId])
+  @@index([userId, status])
+  @@index([courseId])
+}
+
+model LessonProgress {
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  lessonId            String
+  lesson              Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  isCompleted         Boolean   @default(false)
+  lastPositionSeconds Int       @default(0)
+  completedAt         DateTime?
+  updatedAt           DateTime  @updatedAt
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+}
+
+model Certificate {
+  id              String     @id @default(cuid())
+  certificateCode String     @unique
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  courseId        String
+  course          Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  enrollmentId    String
+  enrollment      Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  issuedAt        DateTime   @default(now())
+  pdfUrl          String?
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([userId])
+  @@index([courseId])
+}
