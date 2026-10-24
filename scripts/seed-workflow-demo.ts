@@ -217,7 +217,7 @@ async function runWorkflowDemo() {
       userId: student.id,
       title: "🎓 Chúc mừng tốt nghiệp khóa học!",
       message: `Bạn đã xuất sắc hoàn thành 100% khóa học "${course.title}". Chứng chỉ số định danh "${certificateCode}" đã được cấp vào hồ sơ của bạn.`,
-      type: NotificationType.ACHIEVEMENT,
+      type: NotificationType.SYSTEM,
       actionUrl: "/profile",
     },
   });
@@ -295,7 +295,7 @@ async function runWorkflowDemo() {
       id: enrollment.id,
       status: enrollment.status,
       progressPercent: enrollment.progressPercent,
-      createdAt: enrollment.createdAt,
+      enrolledAt: enrollment.enrolledAt,
     },
     certificate: {
       id: certificate.id,

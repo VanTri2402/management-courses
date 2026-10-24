@@ -9,7 +9,7 @@ declare global {
 }
 
 function createPrismaClient(): PrismaClient {
-  const connectionString = process.env.DATABASE_URL || "";
+  const connectionString = process.env.DATABASE_URL || "postgresql://postgres:postgres@localhost:5432/enterprise_db";
   const isNeon = connectionString.includes("neon.tech") || connectionString.includes("neondb");
 
   if (isNeon) {
